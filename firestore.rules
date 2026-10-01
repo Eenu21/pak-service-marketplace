@@ -352,8 +352,44 @@ service cloud.firestore {
       allow read: if signedIn() &&
         (
           isAdmin() ||
-          resource.data.sender_id == uid() ||
-          resource.data.receiver_id == uid()
+          (
+            jobExists(resource.data.job_id) &&
+            jobData(resource.data.job_id).assigned_pro_id != null &&
+            (
+              jobData(resource.data.job_id).status == 'in_process' ||
+              jobData(resource.data.job_id).status == 'completed' ||
+              jobData(resource.data.job_id).status == 'paid_closed' ||
+              jobData(resource.data.job_id).status == 'disputed'
+            ) &&
+            (
+              (
+                jobData(resource.data.job_id).customer_id == uid() &&
+                (
+                  (
+                    resource.data.sender_id == uid() &&
+                    resource.data.receiver_id == jobData(resource.data.job_id).assigned_pro_id
+                  ) ||
+                  (
+                    resource.data.sender_id == jobData(resource.data.job_id).assigned_pro_id &&
+                    resource.data.receiver_id == uid()
+                  )
+                )
+              ) ||
+              (
+                jobData(resource.data.job_id).assigned_pro_id == uid() &&
+                (
+                  (
+                    resource.data.sender_id == uid() &&
+                    resource.data.receiver_id == jobData(resource.data.job_id).customer_id
+                  ) ||
+                  (
+                    resource.data.sender_id == jobData(resource.data.job_id).customer_id &&
+                    resource.data.receiver_id == uid()
+                  )
+                )
+              )
+            )
+          )
         );
       allow create: if signedIn() &&
         request.resource.data.id == documentId &&

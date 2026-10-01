@@ -199,7 +199,15 @@ class SupabaseMarketplaceRepository implements MarketplaceRepository {
     controller = StreamController<AppUser?>(
       onListen: () async {
         await attachProfileStream(_client.auth.currentUser?.id);
-        authSub = _client.auth.onAuthStateChange.listen((_) async {
+        authSub = _client.auth.onAuthStateChange.listen((authState) async {
+          final session = authState.session;
+          if (authState.event == AuthChangeEvent.initialSession &&
+              session != null) {
+            await _recordAuthSessionEvent(
+              userId: session.user.id,
+              action: 'session_resumed',
+            );
+          }
           await attachProfileStream(_client.auth.currentUser?.id);
         }, onError: controller.addError);
       },
@@ -926,6 +934,7 @@ class SupabaseMarketplaceRepository implements MarketplaceRepository {
         .eq('id', jobId)
         .single();
     final job = Job.fromJson(Map<String, dynamic>.from(currentJob));
+    final now = DateTime.now();
 
     await _client
         .from('bids')
@@ -947,17 +956,35 @@ class SupabaseMarketplaceRepository implements MarketplaceRepository {
             ...job.timeline.map((event) => event.toJson()),
             JobTimelineEvent(
               type: 'bid_accepted',
-              at: DateTime.now(),
+              at: now,
               actorId: customerId,
             ).toJson(),
             JobTimelineEvent(
               type: 'in_process',
-              at: DateTime.now(),
+              at: now,
               actorId: selectedBid.proId,
             ).toJson(),
           ],
         })
         .eq('id', jobId);
+    await addAuditEvent(
+      AuditEvent(
+        id: _uuid.v4(),
+        actorId: customerId,
+        action: 'bid_accepted',
+        entityType: 'job',
+        entityId: jobId,
+        createdAt: now,
+        metadata: <String, dynamic>{
+          'bid_id': bidId,
+          'customer_id': customerId,
+          'pro_id': selectedBid.proId,
+          'job_title': job.title,
+          'amount': selectedBid.amount,
+          'accepted_at': now.toIso8601String(),
+        },
+      ),
+    );
   }
 
   @override
@@ -1274,23 +1301,41 @@ class SupabaseMarketplaceRepository implements MarketplaceRepository {
     if (!actorIsAdmin && job.customerId != actorId && !canProCancel) {
       throw StateError('Only the job owner can cancel this job.');
     }
+    final now = DateTime.now();
     await _client
         .from('jobs')
         .update(<String, dynamic>{
           'status': JobStatus.cancelled.value,
           'cancel_reason': reason,
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': now.toIso8601String(),
           'timeline': <Map<String, dynamic>>[
             ...job.timeline.map((event) => event.toJson()),
             JobTimelineEvent(
               type: 'cancelled',
-              at: DateTime.now(),
+              at: now,
               actorId: actorId,
               metadata: <String, dynamic>{'reason': reason},
             ).toJson(),
           ],
         })
         .eq('id', jobId);
+    await addAuditEvent(
+      AuditEvent(
+        id: _uuid.v4(),
+        actorId: actorId,
+        action: 'job_cancelled',
+        entityType: 'job',
+        entityId: jobId,
+        createdAt: now,
+        metadata: <String, dynamic>{
+          'job_title': job.title,
+          'customer_id': job.customerId,
+          'pro_id': job.assignedProId,
+          'reason': reason,
+          'cancelled_at': now.toIso8601String(),
+        },
+      ),
+    );
   }
 
   @override
@@ -1301,29 +1346,63 @@ class SupabaseMarketplaceRepository implements MarketplaceRepository {
   }) async {
     final row = await _client.from('jobs').select().eq('id', jobId).single();
     final job = Job.fromJson(Map<String, dynamic>.from(row));
+    final actor = await _loadProfileForAccess(actorId);
     final canRaiseDispute =
         job.assignedProId != null &&
-        job.status.index >= JobStatus.inProcess.index;
+        (job.status == JobStatus.inProcess ||
+            job.status == JobStatus.completed ||
+            job.status == JobStatus.paidClosed);
+    final isParticipant =
+        actor.role == UserRole.admin ||
+        job.customerId == actorId ||
+        job.assignedProId == actorId;
     if (!canRaiseDispute) {
-      throw StateError('Dispute can only be raised after a pro is assigned.');
+      throw StateError(
+        'Disputes require an assigned job that is not cancelled or disputed.',
+      );
     }
+    if (!isParticipant) {
+      throw StateError('Only job participants or admins can raise a dispute.');
+    }
+    final sanitizedReason = reason.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (sanitizedReason.length < 3 || sanitizedReason.length > 500) {
+      throw FormatException('Dispute reason must be 3 to 500 characters.');
+    }
+    final now = DateTime.now();
     await _client
         .from('jobs')
         .update(<String, dynamic>{
           'status': JobStatus.disputed.value,
-          'dispute_reason': reason,
-          'updated_at': DateTime.now().toIso8601String(),
+          'dispute_reason': sanitizedReason,
+          'updated_at': now.toIso8601String(),
           'timeline': <Map<String, dynamic>>[
             ...job.timeline.map((event) => event.toJson()),
             JobTimelineEvent(
               type: 'disputed',
-              at: DateTime.now(),
+              at: now,
               actorId: actorId,
-              metadata: <String, dynamic>{'reason': reason},
+              metadata: <String, dynamic>{'reason': sanitizedReason},
             ).toJson(),
           ],
         })
         .eq('id', jobId);
+    await addAuditEvent(
+      AuditEvent(
+        id: _uuid.v4(),
+        actorId: actorId,
+        action: 'job_disputed',
+        entityType: 'job',
+        entityId: jobId,
+        createdAt: now,
+        metadata: <String, dynamic>{
+          'job_title': job.title,
+          'customer_id': job.customerId,
+          'pro_id': job.assignedProId,
+          'reason': sanitizedReason,
+          'raised_at': now.toIso8601String(),
+        },
+      ),
+    );
   }
 
   @override
@@ -1497,7 +1576,7 @@ class SupabaseMarketplaceRepository implements MarketplaceRepository {
     }
     final assignedProId = jobRow['assigned_pro_id'] as String?;
     final status = JobStatusX.fromValue(jobRow['status'] as String? ?? '');
-    if (assignedProId == null || status.index < JobStatus.inProcess.index) {
+    if (assignedProId == null || !status.allowsChat) {
       throw StateError(
         'Messaging unlocks only after bid approval and assignment.',
       );

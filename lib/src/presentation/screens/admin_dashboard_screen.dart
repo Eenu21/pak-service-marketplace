@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/config/repository_provider.dart';
 import '../../core/services/formatters.dart';
+import '../../core/services/session_analytics.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/responsive.dart';
 import '../../domain/models.dart';
@@ -289,6 +290,16 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     return '${_formatShortDate(range.start)} - ${_formatShortDate(range.end)}';
   }
 
+  String _formatDuration(Duration duration) {
+    final seconds = duration.inSeconds.clamp(0, 1 << 31);
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    if (hours > 0) {
+      return '${hours}h ${minutes}m';
+    }
+    return '${minutes}m ${seconds % 60}s';
+  }
+
   ThemeData _buildAdminTheme(BuildContext context) {
     final base = Theme.of(context);
     if (!_darkMode) {
@@ -522,6 +533,42 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
         ? users.where((u) => u.role == UserRole.admin).length
         : metrics?.totalAdmins ?? 0;
     final totalUsers = totalCustomers + totalPros;
+    final completedSessions = SessionAnalytics.completedSessions(audits);
+    final sessionsInRange = completedSessions
+        .where((session) => inRange(session.startedAt))
+        .toList(growable: false);
+    final rangeDurations = sessionsInRange
+        .map((session) => session.duration)
+        .toList(growable: false);
+    final allTimeDurations = completedSessions
+        .map((session) => session.duration)
+        .toList(growable: false);
+    final averageSessionDuration = rangeDurations.isEmpty
+        ? Duration.zero
+        : Duration(
+            microseconds:
+                rangeDurations.fold<int>(
+                  0,
+                  (total, value) => total + value.inMicroseconds,
+                ) ~/
+                rangeDurations.length,
+          );
+    final averageSessionDurationAllTime = allTimeDurations.isEmpty
+        ? Duration.zero
+        : Duration(
+            microseconds:
+                allTimeDurations.fold<int>(
+                  0,
+                  (total, value) => total + value.inMicroseconds,
+                ) ~/
+                allTimeDurations.length,
+          );
+    final longestSessionDuration = rangeDurations.isEmpty
+        ? Duration.zero
+        : rangeDurations.reduce((a, b) => a > b ? a : b);
+    final shortestSessionDuration = rangeDurations.isEmpty
+        ? Duration.zero
+        : rangeDurations.reduce((a, b) => a < b ? a : b);
     final suspendedAccounts = users.isNotEmpty
         ? users.where((u) => u.blocked).length
         : 0;
@@ -631,6 +678,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     final filteredAudits = _filterAudits(
       audits: audits,
       query: _auditSearchController.text,
+      range: range,
     );
 
     final theme = _buildAdminTheme(context);
@@ -729,6 +777,22 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                               totalCustomers: totalCustomers,
                               totalPros: totalPros,
                               totalAdmins: totalAdmins,
+                              sessionsInRange: sessionsInRange.length,
+                              averageSessionDuration: sessionsInRange.isEmpty
+                                  ? '—'
+                                  : _formatDuration(averageSessionDuration),
+                              averageSessionDurationAllTime:
+                                  allTimeDurations.isEmpty
+                                  ? '—'
+                                  : _formatDuration(
+                                      averageSessionDurationAllTime,
+                                    ),
+                              longestSessionDuration: rangeDurations.isEmpty
+                                  ? '—'
+                                  : _formatDuration(longestSessionDuration),
+                              shortestSessionDuration: rangeDurations.isEmpty
+                                  ? '—'
+                                  : _formatDuration(shortestSessionDuration),
                               activeDaily: activeDaily,
                               activeWeekly: activeWeekly,
                               activeMonthly: activeMonthly,
@@ -758,6 +822,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                               admin: admin,
                               users: filteredUsers,
                               audits: audits,
+                              sessions: completedSessions,
                               payments: payments,
                               canManageUsers: canManageUsers,
                               canManageCommissions: canManageCommissions,
@@ -881,6 +946,11 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     required int totalCustomers,
     required int totalPros,
     required int totalAdmins,
+    required int sessionsInRange,
+    required String averageSessionDuration,
+    required String averageSessionDurationAllTime,
+    required String longestSessionDuration,
+    required String shortestSessionDuration,
     required int activeDaily,
     required int activeWeekly,
     required int activeMonthly,
@@ -1010,6 +1080,36 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
         icon: Icons.admin_panel_settings_outlined,
         tone: const Color(0xFF6A4C93),
       ),
+      _MetricCardData(
+        label: 'Completed Sessions (Selected Range)',
+        value: sessionsInRange.toString(),
+        icon: Icons.login_outlined,
+        tone: const Color(0xFF00897B),
+      ),
+      _MetricCardData(
+        label: 'Average Session (Selected Range)',
+        value: averageSessionDuration,
+        icon: Icons.timelapse_outlined,
+        tone: const Color(0xFF3949AB),
+      ),
+      _MetricCardData(
+        label: 'Average Session (All Time)',
+        value: averageSessionDurationAllTime,
+        icon: Icons.history_rounded,
+        tone: const Color(0xFF607D8B),
+      ),
+      _MetricCardData(
+        label: 'Longest Session (Selected Range)',
+        value: longestSessionDuration,
+        icon: Icons.trending_up_outlined,
+        tone: const Color(0xFFEF6C00),
+      ),
+      _MetricCardData(
+        label: 'Shortest Session (Selected Range)',
+        value: shortestSessionDuration,
+        icon: Icons.trending_down_outlined,
+        tone: const Color(0xFF6D4C41),
+      ),
     ];
 
     return Column(
@@ -1101,7 +1201,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                 physics: const NeverScrollableScrollPhysics(),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: columns,
-                  mainAxisExtent: 110,
+                  mainAxisExtent: 132,
                   crossAxisSpacing: 10,
                   mainAxisSpacing: 10,
                 ),
@@ -1112,6 +1212,14 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                 },
               );
             },
+          ),
+        if (canViewMetrics)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Session averages and highs/lows use recorded logouts only; force-closed sessions have no inferred end time.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         const SizedBox(height: 20),
         LayoutBuilder(
@@ -1186,6 +1294,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     required AppUser admin,
     required List<AppUser> users,
     required List<AuditEvent> audits,
+    required List<UserSessionRecord> sessions,
     required List<PaymentRecord> payments,
     required bool canManageUsers,
     required bool canManageCommissions,
@@ -1269,6 +1378,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                   (user) => _UserCard(
                     user: user,
                     audits: audits,
+                    sessions: sessions,
                     payments: payments,
                     canManageUsers: canManageUsers,
                     onAction: (action) => _handleUserAction(
@@ -2489,10 +2599,20 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   List<AuditEvent> _filterAudits({
     required List<AuditEvent> audits,
     required String query,
+    required DateTimeRange range,
   }) {
     final normalized = query.trim().toLowerCase();
     return audits
         .where((event) {
+          final isInRange =
+              (event.createdAt.isAfter(range.start) ||
+                  event.createdAt.isAtSameMomentAs(range.start)) &&
+              event.createdAt.isBefore(
+                range.end.add(const Duration(seconds: 1)),
+              );
+          if (!isInRange) {
+            return false;
+          }
           if (normalized.isEmpty) {
             return true;
           }
@@ -2667,16 +2787,31 @@ class _MetricCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Icon(metric.icon, color: metric.tone),
-          const Spacer(),
-          Text(
-            metric.value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+          Row(
+            children: <Widget>[
+              Icon(metric.icon, color: metric.tone),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FittedBox(
+                  alignment: Alignment.centerRight,
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    metric.value,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(metric.label, style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 8),
+          Text(
+            metric.label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ],
       ),
     );
@@ -3056,6 +3191,7 @@ class _UserCard extends StatelessWidget {
   const _UserCard({
     required this.user,
     required this.audits,
+    required this.sessions,
     required this.payments,
     required this.canManageUsers,
     required this.onAction,
@@ -3063,16 +3199,32 @@ class _UserCard extends StatelessWidget {
 
   final AppUser user;
   final List<AuditEvent> audits;
+  final List<UserSessionRecord> sessions;
   final List<PaymentRecord> payments;
   final bool canManageUsers;
   final void Function(_UserAction action) onAction;
 
   @override
   Widget build(BuildContext context) {
-    final recentEvents = audits
-        .where((event) => event.actorId == user.id)
-        .take(3)
+    final recentEvents =
+        audits
+            .where((event) => event.actorId == user.id)
+            .toList(growable: false)
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final visibleEvents = recentEvents.take(3).toList(growable: false);
+    final userSessions = sessions
+        .where((session) => session.userId == user.id)
         .toList(growable: false);
+    final averageSession = userSessions.isEmpty
+        ? Duration.zero
+        : Duration(
+            microseconds:
+                userSessions.fold<int>(
+                  0,
+                  (total, session) => total + session.duration.inMicroseconds,
+                ) ~/
+                userSessions.length,
+          );
     final transactionCount = payments
         .where(
           (payment) =>
@@ -3094,44 +3246,49 @@ class _UserCard extends StatelessWidget {
           ),
         ),
         title: Text(user.fullName),
-        subtitle: Text('${user.email} · ${user.phone}'),
-        trailing: Wrap(
-          spacing: 6,
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            Text(
+              '${user.email} · ${user.phone}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
             _StatusChip(
               label: user.blocked ? 'Suspended' : 'Active',
               tone: user.blocked
                   ? const Color(0xFFEF4444)
                   : const Color(0xFF10B981),
             ),
-            PopupMenuButton<_UserAction>(
-              onSelected: onAction,
-              itemBuilder: (context) => <PopupMenuEntry<_UserAction>>[
-                if (user.role == UserRole.pro)
-                  const PopupMenuItem(
-                    value: _UserAction.verifyPro,
-                    child: Text('Verify Pro'),
-                  ),
-                if (user.role == UserRole.pro)
-                  const PopupMenuItem(
-                    value: _UserAction.unverifyPro,
-                    child: Text('Unverify Pro'),
-                  ),
-                if (canManageUsers && !user.blocked)
-                  const PopupMenuItem(
-                    value: _UserAction.suspend,
-                    child: Text('Suspend Account'),
-                  ),
-                if (canManageUsers && user.blocked)
-                  const PopupMenuItem(
-                    value: _UserAction.restore,
-                    child: Text('Restore Account'),
-                  ),
-                const PopupMenuItem(
-                  value: _UserAction.flag,
-                  child: Text('Flag Suspicious Activity'),
-                ),
-              ],
+          ],
+        ),
+        trailing: PopupMenuButton<_UserAction>(
+          onSelected: onAction,
+          itemBuilder: (context) => <PopupMenuEntry<_UserAction>>[
+            if (user.role == UserRole.pro)
+              const PopupMenuItem(
+                value: _UserAction.verifyPro,
+                child: Text('Verify Pro'),
+              ),
+            if (user.role == UserRole.pro)
+              const PopupMenuItem(
+                value: _UserAction.unverifyPro,
+                child: Text('Unverify Pro'),
+              ),
+            if (canManageUsers && !user.blocked)
+              const PopupMenuItem(
+                value: _UserAction.suspend,
+                child: Text('Suspend Account'),
+              ),
+            if (canManageUsers && user.blocked)
+              const PopupMenuItem(
+                value: _UserAction.restore,
+                child: Text('Restore Account'),
+              ),
+            const PopupMenuItem(
+              value: _UserAction.flag,
+              child: Text('Flag Suspicious Activity'),
             ),
           ],
         ),
@@ -3141,10 +3298,15 @@ class _UserCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('User ID: ${user.id}'),
+                Text('User ID: ${user.id}', softWrap: true),
                 Text('Role: ${user.role.name}'),
                 Text(
+                  'Completed sessions: ${userSessions.length} · Average: ${_formatSessionDuration(averageSession)}',
+                  softWrap: true,
+                ),
+                Text(
                   'Preferred categories: ${user.preferredCategories.map((c) => c.displayName).join(', ')}',
+                  softWrap: true,
                 ),
                 Text('Transactions: $transactionCount'),
                 const SizedBox(height: 8),
@@ -3152,11 +3314,11 @@ class _UserCard extends StatelessWidget {
                   'Recent Activity',
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-                if (recentEvents.isEmpty)
+                if (visibleEvents.isEmpty)
                   const Text('No recent activity recorded.'),
-                if (recentEvents.isNotEmpty)
+                if (visibleEvents.isNotEmpty)
                   Column(
-                    children: recentEvents
+                    children: visibleEvents
                         .map(
                           (event) => ListTile(
                             contentPadding: EdgeInsets.zero,
@@ -3174,6 +3336,16 @@ class _UserCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatSessionDuration(Duration duration) {
+  final seconds = duration.inSeconds < 0 ? 0 : duration.inSeconds;
+  final hours = seconds ~/ 3600;
+  final minutes = (seconds % 3600) ~/ 60;
+  if (hours > 0) {
+    return '${hours}h ${minutes}m';
+  }
+  return '${minutes}m ${seconds % 60}s';
 }
 
 class _StatusChip extends StatelessWidget {

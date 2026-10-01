@@ -10,6 +10,28 @@ class AppTheme {
   static const surface = Color(0xFFF3F7FC);
   static const border = Color(0xFFD8E1ED);
 
+  static TextTheme _withUrduLineHeight(TextTheme textTheme) {
+    TextStyle? withHeight(TextStyle? style) => style?.copyWith(height: 1.3);
+
+    return textTheme.copyWith(
+      displayLarge: withHeight(textTheme.displayLarge),
+      displayMedium: withHeight(textTheme.displayMedium),
+      displaySmall: withHeight(textTheme.displaySmall),
+      headlineLarge: withHeight(textTheme.headlineLarge),
+      headlineMedium: withHeight(textTheme.headlineMedium),
+      headlineSmall: withHeight(textTheme.headlineSmall),
+      titleLarge: withHeight(textTheme.titleLarge),
+      titleMedium: withHeight(textTheme.titleMedium),
+      titleSmall: withHeight(textTheme.titleSmall),
+      bodyLarge: withHeight(textTheme.bodyLarge),
+      bodyMedium: withHeight(textTheme.bodyMedium),
+      bodySmall: withHeight(textTheme.bodySmall),
+      labelLarge: withHeight(textTheme.labelLarge),
+      labelMedium: withHeight(textTheme.labelMedium),
+      labelSmall: withHeight(textTheme.labelSmall),
+    );
+  }
+
   static ThemeData light({Locale? locale}) {
     final base = ThemeData(
       useMaterial3: true,
@@ -84,12 +106,22 @@ class AppTheme {
       ),
     );
 
-    final textTheme = locale?.languageCode == 'ur'
+    final isUrdu = locale?.languageCode == 'ur';
+    final baseTextTheme = isUrdu
         ? GoogleFonts.notoNaskhArabicTextTheme(base.textTheme)
         : GoogleFonts.plusJakartaSansTextTheme(base.textTheme);
+    final textTheme = isUrdu
+        ? _withUrduLineHeight(baseTextTheme)
+        : baseTextTheme;
+    final basePrimaryTextTheme = isUrdu
+        ? GoogleFonts.notoNaskhArabicTextTheme(base.primaryTextTheme)
+        : GoogleFonts.plusJakartaSansTextTheme(base.primaryTextTheme);
 
     return base.copyWith(
       textTheme: textTheme,
+      primaryTextTheme: isUrdu
+          ? _withUrduLineHeight(basePrimaryTextTheme)
+          : basePrimaryTextTheme,
       chipTheme: base.chipTheme.copyWith(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
         side: const BorderSide(color: border),

@@ -144,7 +144,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return false;
     }
     final assignedProId = job.assignedProId;
-    if (assignedProId == null || job.status.index < JobStatus.inProcess.index) {
+    if (assignedProId == null || !job.status.allowsChat) {
       return false;
     }
     final participants = <String>{job.customerId, assignedProId};

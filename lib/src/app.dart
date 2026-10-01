@@ -32,21 +32,17 @@ class MarketplaceApp extends ConsumerWidget {
         if (child == null) {
           return const SizedBox.shrink();
         }
-        // Keep Urdu translation/font, but preserve the app's LTR layout.
-        return Directionality(
-          textDirection: TextDirection.ltr,
-          child: Stack(
-            children: <Widget>[
-              child,
-              if (!useFirebase)
-                const Positioned(
-                  left: 12,
-                  right: 12,
-                  top: 12,
-                  child: SafeArea(child: _RepositoryModeBanner()),
-                ),
-            ],
-          ),
+        return Stack(
+          children: <Widget>[
+            child,
+            if (!useFirebase)
+              const Positioned(
+                left: 12,
+                right: 12,
+                top: 12,
+                child: SafeArea(child: _RepositoryModeBanner()),
+              ),
+          ],
         );
       },
       localizationsDelegates: const <LocalizationsDelegate<dynamic>>[

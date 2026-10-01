@@ -98,6 +98,14 @@ Notes:
 - Android still needs `android/app/google-services.json` from the Firebase console.
 - iOS still needs `ios/Runner/GoogleService-Info.plist` from the Firebase console.
 - If native Firebase is not configured, the app falls back to the local repository on non-web platforms.
+- Deploy `firestore.rules` and `firestore.indexes.json` with Firebase CLI before enabling production chat.
+
+## Audit and Chat Data
+
+- Session analytics pair recorded login/resume events with explicit logout events. Session duration statistics include completed sessions only; the app does not infer an end time after a force-close or device shutdown.
+- Audit records include the app-reported device description, not IP address or precise location.
+- Supabase deployments must apply all files in `backend/supabase/migrations`, including `0007_assigned_job_chat_audit_policies.sql`, to limit chat access to participants on an assigned, chat-enabled job and to bind audit inserts to the authenticated actor.
+- Chat remains available to assigned participants while the job is in process, completed, paid/closed, or disputed. Cancelled/unassigned jobs do not permit chat.
 
 ## Demo Accounts (Local Repository Mode)
 

@@ -40,7 +40,10 @@ List<String> _jobImageAttachments(Job job) {
   for (final event in job.timeline) {
     final raw = event.metadata['image_attachments'];
     if (raw is List) {
-      return raw.map((item) => item.toString()).where((item) => item.isNotEmpty).toList(growable: false);
+      return raw
+          .map((item) => item.toString())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
     }
   }
   return const <String>[];
@@ -658,7 +661,7 @@ class _JobDetailScreenState extends ConsumerState<JobDetailScreen> {
     final canChat =
         job.assignedProId != null &&
         (user.id == job.customerId || user.id == job.assignedProId) &&
-        job.status.index >= JobStatus.inProcess.index;
+        job.status.allowsChat;
     final peerId = user.id == job.customerId
         ? job.assignedProId
         : job.customerId;
@@ -823,7 +826,12 @@ class _JobDetailScreenState extends ConsumerState<JobDetailScreen> {
           builder: (context) {
             final canRaiseDispute =
                 job.assignedProId != null &&
-                job.status.index >= JobStatus.inProcess.index;
+                (job.status == JobStatus.inProcess ||
+                    job.status == JobStatus.completed ||
+                    job.status == JobStatus.paidClosed) &&
+                (user.role == UserRole.admin ||
+                    user.id == job.customerId ||
+                    user.id == job.assignedProId);
             final canCancel =
                 user.role == UserRole.admin ||
                 user.id == job.customerId ||

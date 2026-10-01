@@ -191,6 +191,14 @@ List<AdminPermission> defaultAdminPermissionsForRank(AdminRank rank) {
 }
 
 extension JobStatusX on JobStatus {
+  bool get allowsChat => switch (this) {
+    JobStatus.inProcess ||
+    JobStatus.completed ||
+    JobStatus.paidClosed ||
+    JobStatus.disputed => true,
+    JobStatus.posted || JobStatus.available || JobStatus.cancelled => false,
+  };
+
   String get value => switch (this) {
     JobStatus.posted => 'posted',
     JobStatus.available => 'available',
@@ -776,7 +784,7 @@ class Job {
       return true;
     }
     final isAssignedPro = assignedProId == userId;
-    final accepted = status.index >= JobStatus.inProcess.index;
+    final accepted = status.allowsChat;
     return isAssignedPro && accepted;
   }
 

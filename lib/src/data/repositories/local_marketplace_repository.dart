@@ -1127,6 +1127,24 @@ class LocalMarketplaceRepository implements MarketplaceRepository {
         metadata: <String, dynamic>{'job_id': jobId, 'bid_id': bid.id},
       ),
     );
+    await addAuditEvent(
+      AuditEvent(
+        id: _uuid.v4(),
+        actorId: customerId,
+        action: 'bid_accepted',
+        entityType: 'job',
+        entityId: jobId,
+        createdAt: now,
+        metadata: <String, dynamic>{
+          'bid_id': bid.id,
+          'customer_id': customerId,
+          'pro_id': bid.proId,
+          'job_title': job.title,
+          'amount': bid.amount,
+          'accepted_at': now.toIso8601String(),
+        },
+      ),
+    );
   }
 
   @override
@@ -1488,21 +1506,39 @@ class LocalMarketplaceRepository implements MarketplaceRepository {
     if (!actorIsAdmin && job.customerId != actorId && !canProCancel) {
       throw StateError('Only the job owner can cancel this job.');
     }
+    final now = DateTime.now();
     _jobs[jobId] = job.copyWith(
       status: JobStatus.cancelled,
       cancelReason: reason,
-      updatedAt: DateTime.now(),
+      updatedAt: now,
       timeline: <JobTimelineEvent>[
         ...job.timeline,
         JobTimelineEvent(
           type: 'cancelled',
-          at: DateTime.now(),
+          at: now,
           actorId: actorId,
           metadata: <String, dynamic>{'reason': reason},
         ),
       ],
     );
     _emitJobs(jobId);
+    await addAuditEvent(
+      AuditEvent(
+        id: _uuid.v4(),
+        actorId: actorId,
+        action: 'job_cancelled',
+        entityType: 'job',
+        entityId: jobId,
+        createdAt: now,
+        metadata: <String, dynamic>{
+          'job_title': job.title,
+          'customer_id': job.customerId,
+          'pro_id': job.assignedProId,
+          'reason': reason,
+          'cancelled_at': now.toIso8601String(),
+        },
+      ),
+    );
   }
 
   @override
@@ -1515,27 +1551,55 @@ class LocalMarketplaceRepository implements MarketplaceRepository {
     if (job == null) {
       throw StateError('Job not found.');
     }
+    final actor = _users[actorId];
     final canRaiseDispute =
         job.assignedProId != null &&
-        job.status.index >= JobStatus.inProcess.index;
+        (job.status == JobStatus.inProcess ||
+            job.status == JobStatus.completed ||
+            job.status == JobStatus.paidClosed);
     if (!canRaiseDispute) {
-      throw StateError('Dispute can only be raised after a pro is assigned.');
+      throw StateError(
+        'Disputes require an assigned job that is not cancelled or disputed.',
+      );
     }
+    if (actor?.role != UserRole.admin &&
+        job.customerId != actorId &&
+        job.assignedProId != actorId) {
+      throw StateError('Only job participants or admins can raise a dispute.');
+    }
+    final now = DateTime.now();
     _jobs[jobId] = job.copyWith(
       status: JobStatus.disputed,
       disputeReason: reason,
-      updatedAt: DateTime.now(),
+      updatedAt: now,
       timeline: <JobTimelineEvent>[
         ...job.timeline,
         JobTimelineEvent(
           type: 'disputed',
-          at: DateTime.now(),
+          at: now,
           actorId: actorId,
           metadata: <String, dynamic>{'reason': reason},
         ),
       ],
     );
     _emitJobs(jobId);
+    await addAuditEvent(
+      AuditEvent(
+        id: _uuid.v4(),
+        actorId: actorId,
+        action: 'job_disputed',
+        entityType: 'job',
+        entityId: jobId,
+        createdAt: now,
+        metadata: <String, dynamic>{
+          'job_title': job.title,
+          'customer_id': job.customerId,
+          'pro_id': job.assignedProId,
+          'reason': reason,
+          'raised_at': now.toIso8601String(),
+        },
+      ),
+    );
   }
 
   @override
@@ -1771,7 +1835,7 @@ class LocalMarketplaceRepository implements MarketplaceRepository {
       throw StateError('Job not found.');
     }
     final assignedProId = job.assignedProId;
-    if (assignedProId == null || job.status.index < JobStatus.inProcess.index) {
+    if (assignedProId == null || !job.status.allowsChat) {
       throw StateError(
         'Messaging unlocks only after bid approval and assignment.',
       );

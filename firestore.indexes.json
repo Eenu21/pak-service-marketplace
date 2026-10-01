@@ -21,6 +21,15 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "job_id", "order": "ASCENDING" },
+        { "fieldPath": "sender_id", "order": "ASCENDING" },
+        { "fieldPath": "receiver_id", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chat_messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "job_id", "order": "ASCENDING" },
         { "fieldPath": "sent_at", "order": "ASCENDING" }
       ]
     },

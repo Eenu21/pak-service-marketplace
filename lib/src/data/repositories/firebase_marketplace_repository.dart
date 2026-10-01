@@ -2255,6 +2255,22 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
       );
     }
     batch.set(_jobs.doc(jobId), updatedJob.toJson());
+    final audit = AuditEvent(
+      id: _uuid.v4(),
+      actorId: customerId,
+      action: 'bid_accepted',
+      entityType: 'job',
+      entityId: jobId,
+      createdAt: now,
+      metadata: <String, dynamic>{
+        'bid_id': bid.id,
+        'customer_id': customerId,
+        'pro_id': bid.proId,
+        'job_title': job.title,
+        'amount': bid.amount,
+        'accepted_at': now.toIso8601String(),
+      },
+    );
     final proNotification = NotificationEvent(
       id: _uuid.v4(),
       userId: bid.proId,
@@ -2278,6 +2294,7 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
       _notifications.doc(customerNotification.id),
       customerNotification.toJson(),
     );
+    batch.set(_audits.doc(audit.id), audit.toJson());
     await batch.commit();
   }
 
@@ -2672,7 +2689,25 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
         ),
       ],
     );
-    await _jobs.doc(jobId).set(updated.toJson());
+    final audit = AuditEvent(
+      id: _uuid.v4(),
+      actorId: actorId,
+      action: 'job_cancelled',
+      entityType: 'job',
+      entityId: jobId,
+      createdAt: now,
+      metadata: <String, dynamic>{
+        'job_title': job.title,
+        'customer_id': job.customerId,
+        'pro_id': job.assignedProId,
+        'reason': sanitizedReason,
+        'cancelled_at': now.toIso8601String(),
+      },
+    );
+    final batch = _firestore.batch();
+    batch.set(_jobs.doc(jobId), updated.toJson());
+    batch.set(_audits.doc(audit.id), audit.toJson());
+    await batch.commit();
   }
 
   @override
@@ -2689,11 +2724,23 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
       maxLength: 500,
     );
     final job = await _loadJob(jobId);
+    final actor = await _loadProfileForAccess(actorId);
     final canRaiseDispute =
         job.assignedProId != null &&
-        job.status.index >= JobStatus.inProcess.index;
+        (job.status == JobStatus.inProcess ||
+            job.status == JobStatus.completed ||
+            job.status == JobStatus.paidClosed);
+    final isParticipant =
+        actor.role == UserRole.admin ||
+        job.customerId == actorId ||
+        job.assignedProId == actorId;
     if (!canRaiseDispute) {
-      throw StateError('Dispute can only be raised after a pro is assigned.');
+      throw StateError(
+        'Disputes require an assigned job that is not cancelled or disputed.',
+      );
+    }
+    if (!isParticipant) {
+      throw StateError('Only job participants or admins can raise a dispute.');
     }
     final now = DateTime.now();
     final updated = job.copyWith(
@@ -2710,7 +2757,25 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
         ),
       ],
     );
-    await _jobs.doc(jobId).set(updated.toJson());
+    final audit = AuditEvent(
+      id: _uuid.v4(),
+      actorId: actorId,
+      action: 'job_disputed',
+      entityType: 'job',
+      entityId: jobId,
+      createdAt: now,
+      metadata: <String, dynamic>{
+        'job_title': job.title,
+        'customer_id': job.customerId,
+        'pro_id': job.assignedProId,
+        'reason': sanitizedReason,
+        'raised_at': now.toIso8601String(),
+      },
+    );
+    final batch = _firestore.batch();
+    batch.set(_jobs.doc(jobId), updated.toJson());
+    batch.set(_audits.doc(audit.id), audit.toJson());
+    await batch.commit();
   }
 
   @override
@@ -2962,14 +3027,41 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
 
   @override
   Stream<List<ChatMessage>> watchMessages(String jobId) {
-    return _messages.where('job_id', isEqualTo: jobId).snapshots().map((
-      snapshot,
-    ) {
-      final messages = snapshot.docs
-          .map(_messageFromDoc)
-          .toList(growable: false);
-      messages.sort((a, b) => a.sentAt.compareTo(b.sentAt));
-      return messages;
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) {
+      return Stream<List<ChatMessage>>.error(
+        StateError('Sign in before opening a conversation.'),
+      );
+    }
+    return Stream<Job>.fromFuture(_loadJob(jobId)).asyncExpand((job) {
+      final assignedProId = job.assignedProId;
+      if (assignedProId == null ||
+          !job.status.allowsChat ||
+          (currentUserId != job.customerId && currentUserId != assignedProId)) {
+        return Stream<List<ChatMessage>>.value(const <ChatMessage>[]);
+      }
+      final customerId = job.customerId;
+      final participantFilter = Filter.or(
+        Filter.and(
+          Filter('sender_id', isEqualTo: customerId),
+          Filter('receiver_id', isEqualTo: assignedProId),
+        ),
+        Filter.and(
+          Filter('sender_id', isEqualTo: assignedProId),
+          Filter('receiver_id', isEqualTo: customerId),
+        ),
+      );
+      return _messages
+          .where('job_id', isEqualTo: jobId)
+          .where(participantFilter)
+          .snapshots()
+          .map((snapshot) {
+            final messages = snapshot.docs
+                .map(_messageFromDoc)
+                .toList(growable: false);
+            messages.sort((a, b) => a.sentAt.compareTo(b.sentAt));
+            return messages;
+          });
     });
   }
 
@@ -3005,7 +3097,7 @@ class FirebaseMarketplaceRepository implements MarketplaceRepository {
     final job = await _loadJob(jobId);
     final sender = await _loadProfileForAccess(senderId);
     final assignedProId = job.assignedProId;
-    if (assignedProId == null || job.status.index < JobStatus.inProcess.index) {
+    if (assignedProId == null || !job.status.allowsChat) {
       throw StateError(
         'Messaging unlocks only after bid approval and assignment.',
       );
