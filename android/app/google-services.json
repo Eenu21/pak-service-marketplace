@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "170197394220",
+    "project_id": "servicemenapplication4-2026",
+    "storage_bucket": "servicemenapplication4-2026.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:170197394220:android:8ffc04cd71fd243be2c289",
+        "android_client_info": {
+          "package_name": "com.servicemen.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDlWW6s8MTeTp5ZX1eX788FjENDO4slZK4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

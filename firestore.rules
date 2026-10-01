@@ -1,0 +1,408 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && uid() == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/profiles/$(uid())) &&
+        get(/databases/$(database)/documents/profiles/$(uid())).data.role == 'admin';
+    }
+
+    function isPro() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/profiles/$(uid())) &&
+        get(/databases/$(database)/documents/profiles/$(uid())).data.role == 'pro';
+    }
+
+    function jobExists(jobId) {
+      return exists(/databases/$(database)/documents/jobs/$(jobId));
+    }
+
+    function jobData(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId)).data;
+    }
+
+    function isNotificationTargetPro(targetUserId) {
+      return exists(/databases/$(database)/documents/profiles/$(targetUserId)) &&
+        get(/databases/$(database)/documents/profiles/$(targetUserId)).data.role == 'pro';
+    }
+
+    function boolOrFalse(value) {
+      return value is bool ? value : false;
+    }
+
+    function numberOrZero(value) {
+      return value is number ? value : 0;
+    }
+
+    function listOrEmpty(value) {
+      return value is list ? value : [];
+    }
+
+    function isProfilePrivilegedFieldPreserved() {
+      return request.resource.data.id == resource.data.id &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.blocked == boolOrFalse(resource.data.blocked) &&
+        request.resource.data.admin_rank == resource.data.admin_rank &&
+        request.resource.data.admin_permissions == listOrEmpty(resource.data.admin_permissions) &&
+        request.resource.data.cnic_verified == boolOrFalse(resource.data.cnic_verified) &&
+        request.resource.data.police_verified == boolOrFalse(resource.data.police_verified);
+    }
+
+    function isProfileSelfEditableChange() {
+      return isProfilePrivilegedFieldPreserved() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'full_name',
+          'phone',
+          'username',
+          'profile_image_url',
+          'language_code',
+          'notifications_enabled',
+          'precise_location_enabled',
+          'payment_account',
+          'saved_locations',
+          'preferred_categories',
+          'is_online',
+          'last_seen_at',
+          'last_active_at',
+          'updated_at',
+          'terms_acceptance_history',
+          '_security_update',
+        ]);
+    }
+
+    function isSelfProfessionalUpgrade(userId) {
+      return isSelf(userId) &&
+        resource.data.role == 'customer' &&
+        request.resource.data.role == 'pro' &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.blocked == boolOrFalse(resource.data.blocked) &&
+        request.resource.data.admin_rank == resource.data.admin_rank &&
+        request.resource.data.admin_permissions == listOrEmpty(resource.data.admin_permissions) &&
+        request.resource.data.cnic_verified == boolOrFalse(resource.data.cnic_verified) &&
+        request.resource.data.police_verified == boolOrFalse(resource.data.police_verified) &&
+        request.resource.data.preferred_categories is list &&
+        request.resource.data.preferred_categories.size() > 0 &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'role',
+          'preferred_categories',
+          'updated_at',
+        ]);
+    }
+
+    function hasProfileSecurityContext(action, proId) {
+      return request.resource.data._security_update is map &&
+        request.resource.data._security_update.action == action &&
+        request.resource.data._security_update.pro_id == proId &&
+        request.resource.data._security_update.actor_id == uid();
+    }
+
+    function hasLinkedJobForProfileContext(proId) {
+      return request.resource.data._security_update.job_id is string &&
+        jobExists(request.resource.data._security_update.job_id) &&
+        jobData(request.resource.data._security_update.job_id).assigned_pro_id == proId &&
+        (
+          jobData(request.resource.data._security_update.job_id).customer_id == uid() ||
+          jobData(request.resource.data._security_update.job_id).assigned_pro_id == uid() ||
+          isAdmin()
+        );
+    }
+
+    function isValidCompletionFinancialUpdate(proId) {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'total_earnings',
+          'due_to_app',
+          'updated_at',
+          '_security_update',
+        ]) &&
+        hasProfileSecurityContext('job_completion_financial', proId) &&
+        hasLinkedJobForProfileContext(proId) &&
+        request.resource.data.total_earnings >= numberOrZero(resource.data.total_earnings) &&
+        request.resource.data.due_to_app >= numberOrZero(resource.data.due_to_app);
+    }
+
+    function isValidCompletionRatingUpdate(proId) {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'rating',
+          'total_reviews',
+          'updated_at',
+          '_security_update',
+        ]) &&
+        hasProfileSecurityContext('job_completion_rating', proId) &&
+        hasLinkedJobForProfileContext(proId) &&
+        jobData(request.resource.data._security_update.job_id).customer_id == uid() &&
+        request.resource.data.rating >= 0 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.total_reviews == numberOrZero(resource.data.total_reviews) + 1;
+    }
+
+    function isValidDueSettlementUpdate(proId) {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'due_to_app',
+          'updated_at',
+          '_security_update',
+        ]) &&
+        hasProfileSecurityContext('due_settlement', proId) &&
+        (uid() == proId || isAdmin()) &&
+        request.resource.data.due_to_app == 0 &&
+        request.resource.data.total_earnings == numberOrZero(resource.data.total_earnings) &&
+        request.resource.data.rating == numberOrZero(resource.data.rating) &&
+        request.resource.data.total_reviews == numberOrZero(resource.data.total_reviews);
+    }
+
+    match /profiles/{userId} {
+      allow get, list: if signedIn();
+      allow create: if isSelf(userId) &&
+        request.resource.data.id == userId &&
+        request.resource.data.role != 'admin' &&
+        request.resource.data.blocked == false &&
+        request.resource.data.admin_rank == null &&
+        request.resource.data.admin_permissions is list &&
+        request.resource.data.admin_permissions.size() == 0;
+      allow update: if isAdmin() ||
+        isSelfProfessionalUpgrade(userId) ||
+        (isSelf(userId) && isProfileSelfEditableChange()) ||
+        isValidCompletionFinancialUpdate(userId) ||
+        isValidCompletionRatingUpdate(userId) ||
+        isValidDueSettlementUpdate(userId);
+      allow delete: if isAdmin();
+    }
+
+    match /app_settings/{documentId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /audit_logs/{documentId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && request.resource.data.actor_id == uid();
+      allow update, delete: if isAdmin();
+    }
+
+    match /notifications/{documentId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.user_id == uid());
+      allow create: if signedIn() &&
+        request.resource.data.id == documentId &&
+        (
+          request.resource.data.user_id == uid() ||
+          isAdmin() ||
+          (
+            request.resource.data.metadata is map &&
+            ('job_id' in request.resource.data.metadata) &&
+            request.resource.data.metadata.job_id is string &&
+            jobExists(request.resource.data.metadata.job_id) &&
+            (
+              (
+                jobData(request.resource.data.metadata.job_id).customer_id == uid() &&
+                (
+                  request.resource.data.user_id == jobData(request.resource.data.metadata.job_id).customer_id ||
+                  request.resource.data.user_id == jobData(request.resource.data.metadata.job_id).assigned_pro_id ||
+                  isNotificationTargetPro(request.resource.data.user_id)
+                )
+              ) ||
+              (
+                jobData(request.resource.data.metadata.job_id).assigned_pro_id == uid() &&
+                request.resource.data.user_id == jobData(request.resource.data.metadata.job_id).customer_id
+              )
+            )
+          )
+        );
+      allow update: if isAdmin() ||
+        (
+          signedIn() &&
+          resource.data.user_id == uid() &&
+          request.resource.data.user_id == resource.data.user_id &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['read'])
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /presence/{userId} {
+      allow read: if signedIn();
+      allow create, update: if (isSelf(userId) || isAdmin()) &&
+        request.resource.data.user_id == userId;
+      allow delete: if isAdmin();
+    }
+
+    match /financial_ledger/{documentId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() &&
+        request.resource.data.actor_id == uid() &&
+        (
+          request.resource.data.type == 'payment_recorded' ||
+          request.resource.data.type == 'pro_due_settled'
+        ) &&
+        (
+          request.resource.data.type != 'payment_recorded' ||
+          request.resource.data.customer_id == uid()
+        ) &&
+        (
+          request.resource.data.type != 'pro_due_settled' ||
+          request.resource.data.pro_id == uid() ||
+          isAdmin()
+        );
+      allow update, delete: if isAdmin();
+    }
+
+    match /financial_summary/{documentId} {
+      allow read: if isAdmin();
+      allow write: if signedIn() &&
+        (
+          request.resource.data.scope == 'overall' ||
+          request.resource.data.scope == 'day' ||
+          request.resource.data.scope == 'month'
+        ) &&
+        request.resource.data.scope_key is string &&
+        request.resource.data.updated_at is string;
+    }
+
+    match /jobs/{documentId} {
+      allow read: if signedIn() &&
+        (
+          isAdmin() ||
+          resource.data.customer_id == uid() ||
+          resource.data.assigned_pro_id == uid() ||
+          (isPro() && (resource.data.status == 'available' || resource.data.status == 'posted'))
+        );
+      allow create: if signedIn() &&
+        request.resource.data.id == documentId &&
+        request.resource.data.customer_id == uid() &&
+        (request.resource.data.status == 'available' || request.resource.data.status == 'posted');
+      allow update: if isAdmin() ||
+        (
+          signedIn() &&
+          resource.data.customer_id == uid() &&
+          request.resource.data.customer_id == resource.data.customer_id
+        ) ||
+        (
+          signedIn() &&
+          resource.data.assigned_pro_id == uid() &&
+          request.resource.data.customer_id == resource.data.customer_id &&
+          request.resource.data.assigned_pro_id == resource.data.assigned_pro_id &&
+          request.resource.data.fixed_price == resource.data.fixed_price &&
+          request.resource.data.latitude == resource.data.latitude &&
+          request.resource.data.longitude == resource.data.longitude &&
+          request.resource.data.masked_address == resource.data.masked_address &&
+          request.resource.data.exact_address == resource.data.exact_address
+        );
+      allow delete: if isAdmin() || (signedIn() && resource.data.customer_id == uid());
+    }
+
+    match /bids/{documentId} {
+      allow read: if signedIn() &&
+        (
+          isAdmin() ||
+          resource.data.pro_id == uid() ||
+          (jobExists(resource.data.job_id) && jobData(resource.data.job_id).customer_id == uid())
+        );
+      allow create: if signedIn() &&
+        request.resource.data.id == documentId &&
+        request.resource.data.pro_id == uid() &&
+        jobExists(request.resource.data.job_id) &&
+        (
+          jobData(request.resource.data.job_id).status == 'available' ||
+          jobData(request.resource.data.job_id).status == 'posted'
+        );
+      allow update: if isAdmin() ||
+        (
+          signedIn() &&
+          request.resource.data.job_id == resource.data.job_id &&
+          request.resource.data.pro_id == resource.data.pro_id &&
+          (
+            resource.data.pro_id == uid() ||
+            (
+              jobExists(resource.data.job_id) &&
+              jobData(resource.data.job_id).customer_id == uid() &&
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['status'])
+            )
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /payments/{documentId} {
+      allow read: if signedIn() &&
+        (
+          isAdmin() ||
+          resource.data.customer_id == uid() ||
+          resource.data.pro_id == uid()
+        );
+      allow create: if signedIn() &&
+        request.resource.data.id == documentId &&
+        request.resource.data.customer_id == uid() &&
+        request.resource.data.state == 'completed' &&
+        jobExists(request.resource.data.job_id) &&
+        jobData(request.resource.data.job_id).customer_id == request.resource.data.customer_id &&
+        jobData(request.resource.data.job_id).assigned_pro_id == request.resource.data.pro_id;
+      allow update, delete: if isAdmin();
+    }
+
+    match /chat_messages/{documentId} {
+      allow read: if signedIn() &&
+        (
+          isAdmin() ||
+          resource.data.sender_id == uid() ||
+          resource.data.receiver_id == uid()
+        );
+      allow create: if signedIn() &&
+        request.resource.data.id == documentId &&
+        request.resource.data.sender_id == uid() &&
+        request.resource.data.sender_id != request.resource.data.receiver_id &&
+        jobExists(request.resource.data.job_id) &&
+        jobData(request.resource.data.job_id).assigned_pro_id != null &&
+        (
+          jobData(request.resource.data.job_id).status == 'in_process' ||
+          jobData(request.resource.data.job_id).status == 'completed' ||
+          jobData(request.resource.data.job_id).status == 'paid_closed' ||
+          jobData(request.resource.data.job_id).status == 'disputed'
+        ) &&
+        (
+          (
+            request.resource.data.sender_id == jobData(request.resource.data.job_id).customer_id &&
+            request.resource.data.receiver_id == jobData(request.resource.data.job_id).assigned_pro_id
+          ) ||
+          (
+            request.resource.data.sender_id == jobData(request.resource.data.job_id).assigned_pro_id &&
+            request.resource.data.receiver_id == jobData(request.resource.data.job_id).customer_id
+          )
+        );
+      allow update: if isAdmin() ||
+        (
+          signedIn() &&
+          (resource.data.sender_id == uid() || resource.data.receiver_id == uid()) &&
+          request.resource.data.sender_id == resource.data.sender_id &&
+          request.resource.data.receiver_id == resource.data.receiver_id &&
+          request.resource.data.job_id == resource.data.job_id &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            'reactions',
+            'seen_at',
+            'deleted_by_sender_at',
+            'deleted_by_receiver_at',
+            'deleted_for_everyone_at',
+            'deleted_for_everyone_by',
+          ])
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /reports/{documentId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() &&
+        request.resource.data.id == documentId &&
+        request.resource.data.reporter_id == uid() &&
+        request.resource.data.target_user_id != uid();
+      allow update, delete: if isAdmin();
+    }
+  }
+}

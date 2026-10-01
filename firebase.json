@@ -1,0 +1,27 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "servicemenphoneapp",
+          "appId": "1:863539075914:android:e436dd2f3d9382f668ffb3",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "servicemenphoneapp",
+          "configurations": {
+            "android": "1:863539075914:android:e436dd2f3d9382f668ffb3",
+            "ios": "1:863539075914:ios:b4047f52004a44cc68ffb3",
+            "web": "1:863539075914:web:e3c91ca536d5c37f68ffb3"
+          }
+        }
+      }
+    }
+  }
+}
